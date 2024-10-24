@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+
+change_source() {
+    cat <<'EOF' >/etc/apt/sources.list
+# 默认注释了源码镜像以提高 apt update 速度，如有需要可自行取消注释
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse
+# deb-src https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse
+# deb-src https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse
+# deb-src https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse
+
+# deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-security main restricted universe multiverse
+# # deb-src https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-security main restricted universe multiverse
+
+deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+# deb-src http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+
+# 预发布软件源，不建议启用
+# deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-proposed main restricted universe multiverse
+# # deb-src https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-proposed main restricted universe multiverse
+
+deb https://launchpad.proxy.ustclug.org/deadsnakes/ppa/ubuntu jammy main
+# deb-src https://launchpad.proxy.ustclug.org/deadsnakes/ppa/ubuntu jammy main
+EOF
+
+    cat <<'EOF' >/etc/pip.conf
+[global]
+index-url = https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+format = columns
+
+[install]
+trusted-host = mirrors.tuna.tsinghua.edu.cn
+EOF
+
+    mkdir -p /usr/etc/
+    cat <<'EOF' >/usr/etc/npmrc
+registry=https://registry.npmmirror.com
+EOF
+
+    # https://askubuntu.com/questions/1459005/cant-add-a-public-key-to-ubuntu-22-04
+    gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys BA6932366A755776
+    gpg --export BA6932366A755776 | tee /etc/apt/trusted.gpg.d/launchpad.proxy.ustclug.org.gpg
+}
+
+register() {
+    (
+        cd /KeepAliveE5 || exit 1
+        bash wrapper.sh pull
+        bash wrapper.sh check_env
+        bash wrapper.sh register
+    )
+}
+
+invoke() {
+    dev="$1"
+    (
+        cd /KeepAliveE5 || exit 1
+        bash wrapper.sh pull
+        bash wrapper.sh has_valid_cfg || {
+            echo "Config files are not valid, please run Register App action."
+            exit 1
+        }
+
+        if [ ! "$dev" ]; then
+            sum=$(cksum <<<"$PASSWD" | cut -f1 -d' ')
+            m=$(date "+%-m")
+            d=$(date "+%-d")
+            h=$(date "+%-H")
+            [ $(((d + m + sum) % 6)) = 1 ] && exit 0
+            [ $(((h + d + sum) & 1)) = 1 ] && exit 0
+        fi
+
+        bash wrapper.sh invoke
+
+        env TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S"
+    )
+}
+
+add_job() {
+    jobs="$(crontab -l 2>/dev/null)"
+    if ! echo "$jobs" | grep -q invoke; then
+        {
+            if ! echo "$jobs" | grep -q DOCKER; then
+                # cat /proc/1/environ |
+                #     sed -r 's/=/="/g' |
+                #     sed -z 's/\n/\\n/g' |
+                #     sed -r 's/\x0/"\n/g'
+                python3 -c 'import os, json; [print("{0}={1}".format(k, json.dumps(v))) for k, v in os.environ.items() if k in ("PATH", "USER", "PASSWD", "DOCKER", "HOSTNAME", "TZ", "HOME")]'
+                echo
+            fi
+
+            [ "$jobs" ] && echo "$jobs"
+
+            # https://snippets.aktagon.com/snippets/945-how-to-get-cron-to-log-to-stdout-under-docker-and-kubernetes
+            echo "7 1,5,10,14,17,22 * * * run invoke 1>/proc/1/fd/1 2>/proc/1/fd/2"
+            echo
+        } | crontab -
+    fi
+}
+
+view_config() {
+    (
+        cd /KeepAliveE5 || exit 1
+        poetry run python crypto.py d || eixt 1
+        awk '1' config/*
+        poetry run python crypto.py e || eixt 1
+    )
+}
+
+case $1 in
+change_source | register | invoke | add_job | view_config)
+    act="$1"
+    shift
+    $act "$@"
+    ;;
+*)
+    echo "Not supported"
+    exit 1
+    ;;
+esac
